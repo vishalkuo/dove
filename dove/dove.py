@@ -5,9 +5,12 @@ from os import path
 import sys
 import json
 from typing import Dict
+import time
 
 HOME_DIR = path.expanduser("~")
 DEFAULT_CONFIG = path.join(HOME_DIR, ".dove_config.json")
+DROPLET_POLLS = 3
+POLLING_INTERVAL = 5
 
 
 @click.group()
@@ -49,7 +52,45 @@ def up(config: str = DEFAULT_CONFIG):
     click.echo("Creating droplet...")
     droplet = digitalocean.Droplet(**droplet_config)
     droplet.create()
-    print(droplet)
+
+    click.echo(f"Successfully created droplet! Polling to get IP address...")
+    for _i in range(DROPLET_POLLS):
+        d = do_manager.get_droplet(droplet.id)
+        if d.ip_address and d.status == "active":
+            click.secho(f"Found IP address:\n\tssh root@{d.ip_address}", fg="green")
+            sys.exit(0)
+        else:
+            time.sleep(POLLING_INTERVAL)
+
+    click.echo(
+        "Droplet is still starting up. Please wait or check the digital ocean UI for its status"
+    )
+
+
+@cli.command()
+@click.option("--name", "-n", default=None, help="The name of the droplet to check on")
+@click.option(
+    "--config",
+    default=DEFAULT_CONFIG,
+    help=f"The location of the config file. Defaults to {DEFAULT_CONFIG}",
+)
+def status(name: str, config: str = DEFAULT_CONFIG):
+    parsed_config = _load_config(config)
+    token = _try_get(parsed_config, "token")
+    do_manager = digitalocean.Manager(token=token)
+
+    if not name:
+        name = _try_get(parsed_config, "droplet")["name"]
+
+    droplet_info = do_manager.get_all_droplets()
+    droplet = next((d for d in droplet_info if d.name == name), None)
+    if not droplet:
+        click.secho(f"Couldn't find droplet for name {name}", fg="red")
+        sys.exit(1)
+
+    click.echo(f"status: {droplet.status}")
+    click.echo(f"ip address: {droplet.ip_address}")
+    click.echo(f"created at: {droplet.created_at}")
 
 
 def _load_config(config: str) -> Dict[any, any]:
