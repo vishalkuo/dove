@@ -1,0 +1,2 @@
+python-digitalocean==1.13.2
+click==6.6
