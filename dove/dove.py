@@ -22,8 +22,55 @@ def cli():
 
 
 @cli.command()
-def init():
-    pass
+@click.option(
+    "--config",
+    default=DEFAULT_CONFIG,
+    help=f"The location of the config file. Defaults to {DEFAULT_CONFIG}",
+)
+def init(config: str):
+    token = click.prompt("Enter your access token", hide_input=True, type=str)
+    region = click.prompt(
+        "Enter the region you'd like to use for your droplet", type=str, default="nyc1"
+    )
+    size = click.prompt(
+        "Enter the droplet size you'd like to use", type=str, default="s-2vcpu-4gb"
+    )
+    image = click.prompt(
+        "Enter the image you'd like to use", type=str, default="ubuntu-16-04-x64"
+    )
+    name = click.prompt("Enter the name you'd like to give your droplet", type=str)
+    ssh_raw = click.prompt(
+        "Enter the ssh keys, comma separated, that will have access to your droplet",
+        type=str,
+    )
+    snapshot_prefix = click.prompt(
+        "Enter the snapshot prefix you'd like to use (must be unique)"
+    )
+
+    ssh_keys = [s.strip() for s in ssh_raw.split(",")]
+
+    dove_config = {
+        "token": token,
+        "droplet": {
+            "region": region,
+            "size": size,
+            "image": image,
+            "backups": False,
+            "ipv6": False,
+            "user_data": None,
+            "private_networking": None,
+            "volumes": None,
+            "name": name,
+        },
+        "ssh_keys": ssh_keys,
+        "snapshot_prefix": snapshot_prefix,
+    }
+
+    with open(config, "w") as f:
+        data = json.dumps(dove_config, indent=2)
+        f.write(data)
+
+    click.echo(f"Wrote configuration to {config}")
 
 
 @cli.command()
@@ -32,7 +79,7 @@ def init():
     default=DEFAULT_CONFIG,
     help=f"The location of the config file. Defaults to {DEFAULT_CONFIG}",
 )
-def up(config: str = DEFAULT_CONFIG):
+def up(config: str):
     parsed_config = _load_config(config)
     manager = digitalocean.Manager(token=parsed_config["token"])
 
@@ -49,12 +96,17 @@ def up(config: str = DEFAULT_CONFIG):
     snapshot_prefix = _try_get(parsed_config, "snapshot_prefix")
     click.echo(f"Searching for snapshot with prefix: {snapshot_prefix}")
     snapshots = _get_snapshots_with_prefix(snapshot_prefix, manager)
-    if not snapshots:
-        click.secho(f"No snapshot found with prefix: {snapshot_prefix}", fg="red")
-        sys.exit(1)
 
-    # Take the latest snapshot
-    snapshot = sorted(snapshots)[-1]
+    image = droplet_config["image"]
+    if not snapshots:
+        click.confirm(
+            f"No snapshot found with prefix: {snapshot_prefix}, would you like to use the default: {image}?",
+            abort=True,
+        )
+    else:
+        # Take the latest snapshot
+        snapshot = sorted(snapshots)[-1]
+        image = snapshot.id
 
     # Load SSH Keys
     ssh_key_names = set(_try_get(parsed_config, "ssh_keys"))
@@ -62,7 +114,7 @@ def up(config: str = DEFAULT_CONFIG):
     ssh_key_set = [key for key in ssh_keys if key.name in ssh_key_names]
 
     # Make request
-    droplet_config["image"] = snapshot.id
+    droplet_config["image"] = image
     droplet_config["token"] = parsed_config["token"]
     droplet_config["ssh_keys"] = ssh_key_set
 
