@@ -10,7 +10,7 @@ from datetime import datetime
 
 HOME_DIR = path.expanduser("~")
 DEFAULT_CONFIG = path.join(HOME_DIR, ".dove_config.json")
-DROPLET_POLLS = 3
+DROPLET_POLLS = 10
 POLLING_INTERVAL = 5
 SNAPSHOT_POLLS = 360
 SNAPSHOT_INTERVAL = 10
