@@ -7,6 +7,7 @@ from ..dove import cli, DEFAULT_CONFIG
 patch_base = "dove.dove"
 do_patch = ".".join([patch_base, "digitalocean"])
 time_patch = ".".join([patch_base, "time"])
+datetime_patch = ".".join([patch_base, "datetime"])
 
 
 @patch(time_patch)
@@ -36,6 +37,7 @@ class TestDove(unittest.TestCase):
         self.droplet.name = self.droplet_config["name"]
         self.droplet.ip_address = "1.1.1.1"
         self.droplet.status = "active"
+        self.droplet.created_at = "foo"
         self.snapshot = MagicMock()
         self.snapshot.name = f"{self.config['snapshot_prefix']} - foo"
         self.snapshot.id = 100
@@ -126,3 +128,73 @@ class TestDove(unittest.TestCase):
             )
             self.assertEqual(0, result.exit_code)
             time.sleep.assert_not_called()
+
+    def test_status_if_missing(self, do, time):
+        do.Manager.return_value = self.manager
+        self.manager.get_all_droplets.return_value = []
+        with patch("builtins.open", mock_open(read_data=self.raw_config)):
+            result = CliRunner().invoke(cli, ["status"])
+            self.assertEqual(1, result.exit_code)
+
+    def test_status_if_exists(self, do, time):
+        do.Manager.return_value = self.manager
+        self.manager.get_all_droplets.return_value = [self.droplet]
+        with patch("builtins.open", mock_open(read_data=self.raw_config)):
+            result = CliRunner().invoke(cli, ["status"])
+            self.assertEqual(
+                "status: active\nip_address: 1.1.1.1\ncreated_at: foo\n", result.output
+            )
+            self.assertEqual(0, result.exit_code)
+
+    def test_down_if_no_droplet(self, do, time):
+        do.Manager.return_value = self.manager
+        self.manager.get_all_droplets.return_value = []
+        with patch("builtins.open", mock_open(read_data=self.raw_config)):
+            result = CliRunner().invoke(cli, ["down"])
+            self.assertEqual(1, result.exit_code)
+
+    @patch(datetime_patch)
+    def test_down_if_droplet_and_finished_snapshot(self, datetime, do, time):
+        suffix = "bar"
+        do.Manager.return_value = self.manager
+        self.manager.get_all_droplets.return_value = [self.droplet]
+        datetime.now.return_value = suffix
+        do_result = MagicMock()
+        do_result.status = "completed"
+        self.droplet.take_snapshot.return_value = do_result
+
+        snapshot_name = f"{self.config['snapshot_prefix']} - {suffix}"
+        new_snapshot = MagicMock()
+        new_snapshot.name = snapshot_name
+
+        self.manager.get_all_snapshots.return_value = [self.snapshot, new_snapshot]
+
+        with patch("builtins.open", mock_open(read_data=self.raw_config)):
+            result = CliRunner().invoke(cli, ["down"])
+            self.droplet.take_snapshot.assert_called_with(
+                snapshot_name, return_dict=False, power_off=True
+            )
+            do_result.load.assert_called_with()
+            self.snapshot.destroy.assert_called_with()
+            self.droplet.destroy.assert_called_with()
+            self.assertEqual(0, result.exit_code)
+
+    @patch(datetime_patch)
+    def test_down_if_droplet_and_unfinished_snapshot(self, datetime, do, time):
+        suffix = "foo"
+        do.Manager.return_value = self.manager
+        self.manager.get_all_droplets.return_value = [self.droplet]
+        datetime.now.return_value = suffix
+        do_result = MagicMock()
+        do_result.status = "incomplete"
+        self.droplet.take_snapshot.return_value = do_result
+
+        with patch("builtins.open", mock_open(read_data=self.raw_config)):
+            result = CliRunner().invoke(cli, ["down"])
+            self.droplet.take_snapshot.assert_called_with(
+                f"{self.config['snapshot_prefix']} - {suffix}",
+                return_dict=False,
+                power_off=True,
+            )
+            do_result.load.assert_called_with()
+            self.assertEqual(1, result.exit_code)
