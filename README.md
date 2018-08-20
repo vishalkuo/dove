@@ -20,7 +20,7 @@ Developing on a remote environment provides several advantages over local develo
 4.  Start your droplet with `dove up`
 5.  Clean up your droplet and take a snapshot with `dove down`
 
-Additional help: `dove --hep`
+Additional help: `dove --help`
 
 ## How Does It Work?
 
