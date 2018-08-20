@@ -34,22 +34,21 @@ def init():
 )
 def up(config: str = DEFAULT_CONFIG):
     parsed_config = _load_config(config)
-    do_manager = digitalocean.Manager(token=parsed_config["token"])
+    manager = digitalocean.Manager(token=parsed_config["token"])
 
     # Load snapshots
     snapshot_prefix = _try_get(parsed_config, "snapshot_prefix")
     click.echo(f"Searching for snapshot with prefix: {snapshot_prefix}")
-    snapshots = do_manager.get_all_snapshots()
-    snapshot: digitalocean.Snapshot = next(
-        (s for s in snapshots if s.name.startswith(snapshot_prefix)), None
-    )
-    if not snapshot:
+    snapshots = _get_snapshots_with_prefix(snapshot_prefix, manager)
+    if not snapshots:
         click.secho(f"No snapshot found with prefix: {snapshot_prefix}", fg="red")
         sys.exit(1)
 
+    snapshot = sorted(snapshots)[0]
+
     # Load SSH Keys
     ssh_key_names = set(_try_get(parsed_config, "ssh_keys"))
-    ssh_keys = do_manager.get_all_sshkeys()
+    ssh_keys = manager.get_all_sshkeys()
     ssh_key_set = [key for key in ssh_keys if key.name in ssh_key_names]
 
     # Make request
@@ -62,12 +61,13 @@ def up(config: str = DEFAULT_CONFIG):
     droplet = digitalocean.Droplet(**droplet_config)
     droplet.create()
 
-    click.echo(f"Successfully created droplet! Polling to get IP address...")
+    click.echo(f"Successfully created droplet! Polling until active...")
     for _i in range(DROPLET_POLLS):
         droplet.load()
         if droplet.ip_address and droplet.status == "active":
             click.secho(
-                f"Found IP address:\n\tssh root@{droplet.ip_address}", fg="green"
+                f"Droplet is active, access at:\n\tssh root@{droplet.ip_address}",
+                fg="green",
             )
             sys.exit(0)
         else:
@@ -88,16 +88,11 @@ def up(config: str = DEFAULT_CONFIG):
 def status(name: str, config: str = DEFAULT_CONFIG):
     parsed_config = _load_config(config)
     token = _try_get(parsed_config, "token")
-    do_manager = digitalocean.Manager(token=token)
+    manager = digitalocean.Manager(token=token)
 
-    if not name:
-        name = _try_get(parsed_config, "droplet")["name"]
+    name = name or _try_get(parsed_config, "droplet")["name"]
 
-    droplet_info = do_manager.get_all_droplets()
-    droplet = next((d for d in droplet_info if d.name == name), None)
-    if not droplet:
-        click.secho(f"Couldn't find droplet for name {name}", fg="red")
-        sys.exit(1)
+    droplet = _get_droplet_by_name(name, manager)
 
     for key in ["status", "ip_address", "created_at"]:
         click.echo(f"{key}: {getattr(droplet, key)}")
