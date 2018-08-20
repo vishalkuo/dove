@@ -1,4 +1,5 @@
 # Dove
+[![PyPI version](https://badge.fury.io/py/droplet-dove.svg)](https://badge.fury.io/py/droplet-dove)
 
 A command line utility to help manage your development server in Digital Ocean
 
@@ -15,7 +16,7 @@ Developing on a remote environment provides several advantages over local develo
     pip install droplet_dove
     ```
 
-3.  Initialize your droplet with `dove init`
+3.  Initialize dove with `dove init`
 4.  Start your droplet with `dove up`
 5.  Clean up your droplet and take a snapshot with `dove down`
 
