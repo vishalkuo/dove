@@ -36,6 +36,15 @@ def up(config: str = DEFAULT_CONFIG):
     parsed_config = _load_config(config)
     manager = digitalocean.Manager(token=parsed_config["token"])
 
+    # Check for already running server
+    droplet_config = _try_get(parsed_config, "droplet")
+    click.echo("Checking for pre-existing droplet...")
+    droplet_name = droplet_config["name"]
+    existing = _get_droplet_by_name(droplet_name, manager, fail_if_missing=False)
+    if existing:
+        click.secho(f"Droplet with name {droplet_name} already exists, aborting")
+        sys.exit(1)
+
     # Load snapshots
     snapshot_prefix = _try_get(parsed_config, "snapshot_prefix")
     click.echo(f"Searching for snapshot with prefix: {snapshot_prefix}")
@@ -44,7 +53,8 @@ def up(config: str = DEFAULT_CONFIG):
         click.secho(f"No snapshot found with prefix: {snapshot_prefix}", fg="red")
         sys.exit(1)
 
-    snapshot = sorted(snapshots)[0]
+    # Take the latest snapshot
+    snapshot = sorted(snapshots)[-1]
 
     # Load SSH Keys
     ssh_key_names = set(_try_get(parsed_config, "ssh_keys"))
@@ -52,7 +62,6 @@ def up(config: str = DEFAULT_CONFIG):
     ssh_key_set = [key for key in ssh_keys if key.name in ssh_key_names]
 
     # Make request
-    droplet_config = _try_get(parsed_config, "droplet")
     droplet_config["image"] = snapshot.id
     droplet_config["token"] = parsed_config["token"]
     droplet_config["ssh_keys"] = ssh_key_set
@@ -114,7 +123,7 @@ def down(config: str = DEFAULT_CONFIG):
     snapshot_prefix = _try_get(parsed_config, "snapshot_prefix")
     snapshot_name = f"{snapshot_prefix} - {str(datetime.now())}"
 
-    click.echo("Shutting down and starting snapshot...")
+    click.echo("Shutting down droplet and taking snapshot...")
     result = droplet.take_snapshot(snapshot_name, return_dict=False, power_off=True)
 
     click.echo("Waiting for snapshot to complete. This can take up to an hour...")
@@ -157,11 +166,11 @@ def _get_snapshots_with_prefix(
 
 
 def _get_droplet_by_name(
-    name: str, manager: digitalocean.Manager
+    name: str, manager: digitalocean.Manager, fail_if_missing=True
 ) -> digitalocean.Droplet:
     droplets = manager.get_all_droplets()
     droplet: digitalocean.Droplet = next((d for d in droplets if d.name == name), None)
-    if not droplet:
+    if not droplet and fail_if_missing:
         click.secho(f"No droplet found for name: {name}", fg="red")
         sys.exit(1)
     return droplet
