@@ -4,17 +4,25 @@ import os
 from os import path
 import sys
 import json
-from typing import Dict
+from typing import Dict, List
 import time
+from datetime import datetime
 
 HOME_DIR = path.expanduser("~")
 DEFAULT_CONFIG = path.join(HOME_DIR, ".dove_config.json")
 DROPLET_POLLS = 3
 POLLING_INTERVAL = 5
+SNAPSHOT_POLLS = 360
+SNAPSHOT_INTERVAL = 10
 
 
 @click.group()
 def cli():
+    pass
+
+
+@cli.command()
+def init():
     pass
 
 
@@ -29,14 +37,14 @@ def up(config: str = DEFAULT_CONFIG):
     do_manager = digitalocean.Manager(token=parsed_config["token"])
 
     # Load snapshots
-    snapshot_name = _try_get(parsed_config, "snapshot_name")
-    click.echo(f"Searching for snapshot, {snapshot_name}")
+    snapshot_prefix = _try_get(parsed_config, "snapshot_prefix")
+    click.echo(f"Searching for snapshot with prefix: {snapshot_prefix}")
     snapshots = do_manager.get_all_snapshots()
     snapshot: digitalocean.Snapshot = next(
-        (s for s in snapshots if s.name == snapshot_name), None
+        (s for s in snapshots if s.name.startswith(snapshot_prefix)), None
     )
     if not snapshot:
-        click.secho(f"No snapshot found for {snapshot_name}", fg="red")
+        click.secho(f"No snapshot found with prefix: {snapshot_prefix}", fg="red")
         sys.exit(1)
 
     # Load SSH Keys
@@ -44,6 +52,7 @@ def up(config: str = DEFAULT_CONFIG):
     ssh_keys = do_manager.get_all_sshkeys()
     ssh_key_set = [key for key in ssh_keys if key.name in ssh_key_names]
 
+    # Make request
     droplet_config = _try_get(parsed_config, "droplet")
     droplet_config["image"] = snapshot.id
     droplet_config["token"] = parsed_config["token"]
@@ -55,9 +64,11 @@ def up(config: str = DEFAULT_CONFIG):
 
     click.echo(f"Successfully created droplet! Polling to get IP address...")
     for _i in range(DROPLET_POLLS):
-        d = do_manager.get_droplet(droplet.id)
-        if d.ip_address and d.status == "active":
-            click.secho(f"Found IP address:\n\tssh root@{d.ip_address}", fg="green")
+        droplet.load()
+        if droplet.ip_address and droplet.status == "active":
+            click.secho(
+                f"Found IP address:\n\tssh root@{droplet.ip_address}", fg="green"
+            )
             sys.exit(0)
         else:
             time.sleep(POLLING_INTERVAL)
@@ -88,9 +99,77 @@ def status(name: str, config: str = DEFAULT_CONFIG):
         click.secho(f"Couldn't find droplet for name {name}", fg="red")
         sys.exit(1)
 
-    click.echo(f"status: {droplet.status}")
-    click.echo(f"ip address: {droplet.ip_address}")
-    click.echo(f"created at: {droplet.created_at}")
+    for key in ["status", "ip_address", "created_at"]:
+        click.echo(f"{key}: {getattr(droplet, key)}")
+
+
+@cli.command()
+@click.option(
+    "--config",
+    default=DEFAULT_CONFIG,
+    help=f"The location of the config file. Defaults to {DEFAULT_CONFIG}",
+)
+def down(config: str = DEFAULT_CONFIG):
+    parsed_config = _load_config(config)
+    token = _try_get(parsed_config, "token")
+    manager = digitalocean.Manager(token=token)
+
+    droplet_name = _try_get(parsed_config, "droplet")["name"]
+    droplet = _get_droplet_by_name(droplet_name, manager)
+    snapshot_prefix = _try_get(parsed_config, "snapshot_prefix")
+    snapshot_name = f"{snapshot_prefix} - {str(datetime.now())}"
+
+    click.echo("Shutting down and starting snapshot...")
+    result = droplet.take_snapshot(snapshot_name, return_dict=False, power_off=True)
+
+    click.echo("Waiting for snapshot to complete. This can take up to an hour...")
+    for _i in range(SNAPSHOT_POLLS):
+        try:
+            result.load()
+        except digitalocean.baseapi.DataReadError as ex:
+            click.secho(f"Warning, error during polling: {ex}", fg="yellow")
+        if result.status == "completed":
+            break
+        else:
+            time.sleep(SNAPSHOT_INTERVAL)
+
+    if result.status != "completed":
+        # TODO: check for in progress snapshots
+        click.secho(
+            "Snapshot hasn't finished in a reasonable interval, please run manual cleanup",
+            fg="red",
+        )
+        sys.exit(1)
+
+    prefix = _try_get(parsed_config, "snapshot_prefix")
+    all_snapshots = _get_snapshots_with_prefix(prefix, manager)
+    to_delete = filter(lambda s: s.name != snapshot_name, all_snapshots)
+
+    click.echo("Deleting old snapshots...")
+
+    for snapshot in to_delete:
+        snapshot.destroy()
+
+    click.echo("Destroying droplet...")
+    droplet.destroy()
+
+
+def _get_snapshots_with_prefix(
+    prefix: str, manager: digitalocean.Manager
+) -> List[digitalocean.Snapshot]:
+    all_snapshots = manager.get_all_snapshots()
+    return set(filter(lambda s: s.name.startswith(prefix), all_snapshots))
+
+
+def _get_droplet_by_name(
+    name: str, manager: digitalocean.Manager
+) -> digitalocean.Droplet:
+    droplets = manager.get_all_droplets()
+    droplet: digitalocean.Droplet = next((d for d in droplets if d.name == name), None)
+    if not droplet:
+        click.secho(f"No droplet found for name: {name}", fg="red")
+        sys.exit(1)
+    return droplet
 
 
 def _load_config(config: str) -> Dict[any, any]:
@@ -115,11 +194,6 @@ def _try_get(parsed_config: Dict[any, any], key: any) -> any:
         click.secho(f"Key {key} not found", fg="red")
         sys.exit(1)
     return parsed_config[key]
-
-
-@cli.command()
-def init():
-    click.echo("In init")
 
 
 if __name__ == "__main__":
