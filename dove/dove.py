@@ -229,7 +229,7 @@ def _get_droplet_by_name(
 
 
 def _load_config(config: str) -> Dict[any, any]:
-    if not path.exists(DEFAULT_CONFIG):
+    if not path.exists(config):
         click.secho(f"Config not found at {config}", fg="red")
         sys.exit(1)
 
